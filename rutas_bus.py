@@ -96,3 +96,49 @@ def _reconstruir_camino(padre, origen, destino):
         actual = anterior
     tramos.reverse()
     return tramos
+# ---------------------------------------------------------------------------
+# 4. TRADUCCION DEL CAMINO A INSTRUCCIONES LEGIBLES + DETECCION DE TRANSBORDOS
+# ---------------------------------------------------------------------------
+def describir_viaje(tramos, origen, destino):
+    """
+    Convierte la lista de tramos en un texto legible, marcando los
+    transbordos (cuando la ruta de un tramo difiere de la del tramo anterior).
+    """
+    if tramos == []:
+        return f"Ya estas en '{origen}', no se requiere viaje."
+
+    total_paradas = len(tramos)
+    lineas = [f"Ruta optima ({total_paradas} parada{'s' if total_paradas != 1 else ''}):"]
+
+    ruta_anterior = None
+    for numero_parada, (est_origen, est_destino, ruta) in enumerate(tramos, start=1):
+        marca_transbordo = ""
+        if ruta_anterior is not None and ruta != ruta_anterior:
+            marca_transbordo = f"  [transbordo en {est_origen}]"
+        lineas.append(f"  Parada {numero_parada}: {est_origen} -> {est_destino} ({ruta}){marca_transbordo}")
+        ruta_anterior = ruta
+
+    return "\n".join(lineas)
+# ---------------------------------------------------------------------------
+# 5. FUNCION DE ALTO NIVEL: unir todo el flujo
+# ---------------------------------------------------------------------------
+def mejor_ruta(rutas, origen, destino):
+    grafo = construir_grafo(rutas)
+    tramos, error = buscar_camino_mas_corto(grafo, origen, destino)
+    if error:
+        return error
+    return describir_viaje(tramos, origen, destino)
+# ---------------------------------------------------------------------------
+# 6. CASOS DE PRUEBA (segun lo acordado en el diseno)
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    casos_de_prueba = [
+        ("Terminal_Sur", "Parque_Norte"),   # esperado: directo por Ruta_1
+        ("Barrio_Oeste", "Aeropuerto"),     # esperado: con transbordo(s)
+        ("Estadio", "Terminal_Este"),       # esperado: con transbordo
+        ("Aeropuerto", "Terminal_Sur"),     # esperado: sin ruta (grafo dirigido)
+    ]
+
+    for origen, destino in casos_de_prueba:
+        print(f"\n=== De '{origen}' a '{destino}' ===")
+        print(mejor_ruta(rutas_bus, origen, destino))
