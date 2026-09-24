@@ -50,3 +50,49 @@ def construir_grafo(rutas):
             # arcos salientes (ej. una terminal final de ruta).
             grafo.setdefault(destino, [])
     return grafo
+# ---------------------------------------------------------------------------
+# 3. BUSQUEDA DEL CAMINO CON MENOS PARADAS (BFS)
+# ---------------------------------------------------------------------------
+def buscar_camino_mas_corto(grafo, origen, destino):
+    """
+    BFS clasico sobre el grafo dirigido. Devuelve la lista de tramos
+    [(estacion_origen, estacion_destino, ruta), ...] del camino mas corto
+    en numero de paradas, o None si no existe camino.
+    """
+    if origen not in grafo:
+        return None, f"La estacion de origen '{origen}' no existe en el sistema."
+    if destino not in grafo:
+        return None, f"La estacion de destino '{destino}' no existe en el sistema."
+    if origen == destino:
+        return [], None
+
+    visitados = {origen}
+    padre = {}  # padre[estacion] = (estacion_anterior, ruta_usada)
+    cola = deque([origen])
+
+    while cola:
+        actual = cola.popleft()
+        for vecino, ruta in grafo.get(actual, []):
+            if vecino not in visitados:
+                visitados.add(vecino)
+                padre[vecino] = (actual, ruta)
+                if vecino == destino:
+                    return _reconstruir_camino(padre, origen, destino), None
+                cola.append(vecino)
+
+    return None, f"No existe una ruta disponible entre '{origen}' y '{destino}' con las rutas actuales."
+
+def _reconstruir_camino(padre, origen, destino):
+    """
+    Reconstruye el camino desde 'destino' hacia 'origen' usando el registro
+    de padres del BFS, y lo invierte para presentarlo en orden de viaje.
+    Devuelve una lista de tramos: [(estacion_origen, estacion_destino, ruta), ...]
+    """
+    tramos = []
+    actual = destino
+    while actual != origen:
+        anterior, ruta = padre[actual]
+        tramos.append((anterior, actual, ruta))
+        actual = anterior
+    tramos.reverse()
+    return tramos
