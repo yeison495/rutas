@@ -135,3 +135,114 @@ def generar_dataset() -> pd.DataFrame:
             })
     random.shuffle(filas)   # mezclar para que no queden agrupados por tramo
     return pd.DataFrame(filas)
+
+
+def nombrar_grupos(centroides: pd.DataFrame) -> dict:
+    """K-Means numera los grupos al azar (0, 1, ...). Los nombramos segun su velocidad."""
+    orden = centroides["velocidad_kmh"].sort_values().index
+    nombres = NOMBRES_GRUPOS.get(len(orden), [f"Grupo {i + 1}" for i in range(len(orden))])
+    return dict(zip(orden, nombres))
+
+
+def main() -> None:
+    titulo("EJERCICIO: CLUSTERING CON K-MEANS - ESTADOS DE TRAFICO")
+
+    # =========================================================================
+    # 1. PREPARACION DE LOS DATOS
+    # =========================================================================
+    titulo("1. PREPARACION DE LOS DATOS")
+    datos = generar_dataset()
+    datos.to_csv("dataset_tiempos_viaje.csv", index=False)
+    print("Dataset generado y guardado en dataset_tiempos_viaje.csv")
+
+    # Velocidad efectiva del tramo: lo que realmente mediria el GPS del bus
+    datos["velocidad_kmh"] = datos["distancia_km"] / (datos["tiempo_viaje_min"] / 60)
+
+    X = datos[CARACTERISTICAS]          # en no supervisado solo hay X: NO existe "y"
+    print(f"Viajes: {len(datos)} | Caracteristicas usadas: {CARACTERISTICAS}")
+    print("\nMuestra de los datos:")
+    print(X.sample(5, random_state=SEMILLA).round(1).to_string())
+
+    # Escalado: velocidad (~10-35 km/h) y ocupacion (0-100 %) tienen escalas
+    # distintas. Sin escalar, K-Means daria mas peso a la ocupacion solo por
+    # tener numeros mas grandes.
+    escalador = StandardScaler()
+    X_escalado = escalador.fit_transform(X)
+    print("\nDatos escalados (media 0, desviacion 1) para que ambas variables pesen igual.")
+
+    # =========================================================================
+    # 2. ELECCION DEL NUMERO DE GRUPOS (k)
+    # =========================================================================
+    # K-Means necesita que le digamos cuantos grupos buscar. Probamos varios k:
+    #  - Inercia  : que tan compactos son los grupos (menor = mejor, pero
+    #               siempre baja al subir k; se busca el "codo")
+    #  - Silhouette: que tan separados estan los grupos entre si (-1 a 1,
+    #               mayor = mejor). Es el criterio de decision.
+    titulo("2. ELECCION DEL NUMERO DE GRUPOS (k)")
+    inercias, siluetas = [], []
+    print(f"{'k':>3}{'Inercia':>12}{'Silhouette':>13}")
+    for k in RANGO_K:
+        prueba = KMeans(n_clusters=k, n_init=10, random_state=SEMILLA).fit(X_escalado)
+        inercias.append(prueba.inertia_)
+        siluetas.append(silhouette_score(X_escalado, prueba.labels_))
+        print(f"{k:>3}{prueba.inertia_:>12.1f}{siluetas[-1]:>13.3f}")
+
+    k_optimo = list(RANGO_K)[siluetas.index(max(siluetas))]
+    print(f"\nk elegido: {k_optimo} (mayor silhouette = grupos mejor separados)")
+
+    # =========================================================================
+    # 3. CREACION Y ENTRENAMIENTO DEL MODELO (NO SUPERVISADO)
+    # =========================================================================
+    titulo("3. CREACION Y ENTRENAMIENTO DEL MODELO (NO SUPERVISADO)")
+    modelo = KMeans(n_clusters=k_optimo, n_init=10, random_state=SEMILLA)
+    # fit solo recibe X: el modelo agrupa sin conocer ninguna respuesta
+    datos["grupo_id"] = modelo.fit_predict(X_escalado)
+    print("Modelo K-Means entrenado exitosamente.")
+
+    # Centroides = el "viaje tipico" de cada grupo, devuelto a unidades reales
+    centroides = pd.DataFrame(escalador.inverse_transform(modelo.cluster_centers_),
+                              columns=CARACTERISTICAS)
+    nombres = nombrar_grupos(centroides)
+    datos["estado_trafico"] = datos["grupo_id"].map(nombres)
+    centroides.index = centroides.index.map(nombres)
+
+    print("\nViaje tipico (centroide) de cada grupo descubierto:")
+    for nombre, fila in centroides.sort_values("velocidad_kmh").iterrows():
+        cantidad = (datos["estado_trafico"] == nombre).sum()
+        print(f"  {nombre:<15} velocidad {fila.velocidad_kmh:5.1f} km/h | "
+              f"ocupacion {fila.ocupacion_pct:5.1f} % | {cantidad} viajes")
+
+    # =========================================================================
+    # 4. INTERPRETACION DE LOS GRUPOS (evaluacion sin etiquetas)
+    # =========================================================================
+    # No hay "accuracy" porque no hay respuesta correcta. Lo que si podemos hacer
+    # es comparar los grupos con variables que el modelo NUNCA vio (hora pico,
+    # clima) para entender que significa cada grupo.
+    titulo("4. INTERPRETACION DE LOS GRUPOS")
+    tabla = pd.crosstab(datos["estado_trafico"],
+                        datos["es_hora_pico"].map({0: "Fuera de pico", 1: "Hora pico"}))
+    print("Grupos vs. hora pico (variable que el modelo NO uso):")
+    print(tabla.to_string())
+
+    if k_optimo == 2:
+        coinciden = ((datos["estado_trafico"] == "Congestionado") ==
+                     (datos["es_hora_pico"] == 1)).mean()
+        print(f"\nCoincidencia entre 'Congestionado' y hora pico: {coinciden:.1%}")
+        print("=> El modelo descubrio la hora pico por si solo, solo mirando "
+              "velocidad y ocupacion.")
+
+    lluvia = datos.groupby("estado_trafico")["clima"].apply(lambda c: (c == "lluvia").mean())
+    print("\nPorcentaje de viajes con lluvia en cada grupo:")
+    for nombre, valor in lluvia.items():
+        print(f"  {nombre:<15}{valor:6.1%}")
+
+    # =========================================================================
+    # 5. CLASIFICAR NUEVAS MEDICIONES (INFERENCIA)
+    # =========================================================================
+    titulo("5. CLASIFICAR NUEVAS MEDICIONES (INFERENCIA)")
+    nuevas = pd.DataFrame({"velocidad_kmh": [27.0, 14.5, 19.0],
+                           "ocupacion_pct": [35.0, 82.0, 60.0]})
+    estados = pd.Series(modelo.predict(escalador.transform(nuevas))).map(nombres)
+    for (_, medicion), estado in zip(nuevas.iterrows(), estados):
+        print(f"  Bus a {medicion.velocidad_kmh:4.1f} km/h con {medicion.ocupacion_pct:4.0f}% "
+              f"de ocupacion => {estado}")
