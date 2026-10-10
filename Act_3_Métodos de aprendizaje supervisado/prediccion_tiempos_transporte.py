@@ -142,3 +142,70 @@ def generar_dataset() -> pd.DataFrame:
             filas.append(fila)
     random.shuffle(filas)   # mezclar para que no queden agrupados por tramo
     return pd.DataFrame(filas)
+
+
+# =============================================================================
+# 2. CREACION Y ENTRENAMIENTO DEL MODELO
+# =============================================================================
+def crear_modelo() -> Pipeline:
+    """
+    Pipeline = preprocesamiento + modelo en un solo objeto.
+    Las variables de texto (ruta, estacion, dia, clima) se convierten a
+    columnas 0/1 con One-Hot Encoding, porque la regresion solo entiende numeros.
+    """
+    preprocesamiento = ColumnTransformer([
+        ("categoricas", OneHotEncoder(handle_unknown="ignore"), COLUMNAS_CATEGORICAS),
+        ("numericas", "passthrough", COLUMNAS_NUMERICAS),
+    ])
+    return Pipeline([("preprocesamiento", preprocesamiento),
+                     ("regresion", LinearRegression())])
+
+
+def coeficientes(modelo: Pipeline) -> pd.Series:
+    nombres = modelo.named_steps["preprocesamiento"].get_feature_names_out()
+    nombres = [n.split("__", 1)[1] for n in nombres]
+    return pd.Series(modelo.named_steps["regresion"].coef_, index=nombres)
+
+
+# =============================================================================
+# 5. APLICACION: RUTA MAS RAPIDA (Dijkstra con pesos predichos por el modelo)
+# =============================================================================
+def ruta_mas_rapida(modelo, origen, destino, dia, hora, clima):
+    """
+    Cada tramo pesa los minutos que predice el modelo para ese contexto.
+    El estado de busqueda es (estacion, ruta actual) para poder sumar la
+    penalizacion cuando hay transbordo.
+    """
+    tramos = list(PARAMETROS_TRAMO)
+    entradas = pd.DataFrame([construir_registro(*t, dia, hora, clima) for t in tramos])
+    minutos = dict(zip(tramos, modelo.predict(entradas)))
+
+    vecinos = {}
+    for ruta, a, b in tramos:
+        vecinos.setdefault(a, []).append((b, ruta))
+
+    mejor = {(origen, None): 0.0}
+    anterior = {}
+    cola = [(0.0, origen, None)]
+    while cola:
+        costo, estacion, ruta_actual = heapq.heappop(cola)
+        if estacion == destino:
+            camino, estado = [], (estacion, ruta_actual)
+            while estado in anterior:
+                previo = anterior[estado]
+                camino.append((previo[0], estado[0], estado[1],
+                               minutos[(estado[1], previo[0], estado[0])]))
+                estado = previo
+            return camino[::-1], costo
+        if costo > mejor.get((estacion, ruta_actual), float("inf")):
+            continue
+        for siguiente, ruta in vecinos.get(estacion, []):
+            paso = minutos[(ruta, estacion, siguiente)]
+            if ruta_actual is not None and ruta != ruta_actual:
+                paso += PENALIZACION_TRANSBORDO
+            estado = (siguiente, ruta)
+            if costo + paso < mejor.get(estado, float("inf")):
+                mejor[estado] = costo + paso
+                anterior[estado] = (estacion, ruta_actual)
+                heapq.heappush(cola, (costo + paso, siguiente, ruta))
+    return None, None
