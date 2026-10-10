@@ -246,3 +246,100 @@ def main() -> None:
     for (_, medicion), estado in zip(nuevas.iterrows(), estados):
         print(f"  Bus a {medicion.velocidad_kmh:4.1f} km/h con {medicion.ocupacion_pct:4.0f}% "
               f"de ocupacion => {estado}")
+        
+    # =========================================================================
+    # 6. APLICACION A LAS RUTAS
+    # =========================================================================
+    # Con los grupos descubiertos medimos cuantos minutos pierde cada tramo
+    # cuando el trafico pasa a "Congestionado". Sirve para saber que tramos
+    # evitar en esos momentos.
+    titulo("6. APLICACION: TRAMOS MAS AFECTADOS POR LA CONGESTION")
+    lento, rapido = centroides["velocidad_kmh"].idxmin(), centroides["velocidad_kmh"].idxmax()
+    datos["tramo"] = datos["estacion_origen"] + " -> " + datos["estacion_destino"]
+    por_tramo = (datos.groupby(["ruta", "tramo", "estado_trafico"])["tiempo_viaje_min"]
+                 .mean().unstack())
+    por_tramo["minutos_extra"] = por_tramo[lento] - por_tramo[rapido]
+    por_tramo = por_tramo.sort_values("minutos_extra", ascending=False)
+
+    print(f"Tiempo promedio por tramo: {rapido} vs {lento}\n")
+    print(f"  {'Ruta':<8}{'Tramo':<30}{rapido:>9}{lento:>15}{'Extra':>8}")
+    for (ruta, tramo), fila in por_tramo.head(5).iterrows():
+        print(f"  {ruta:<8}{tramo:<30}{fila[rapido]:>7.1f} m{fila[lento]:>13.1f} m"
+              f"{fila.minutos_extra:>+7.1f}")
+
+    por_ruta = por_tramo.groupby("ruta")[[rapido, lento]].sum()
+    por_ruta["minutos_extra"] = por_ruta[lento] - por_ruta[rapido]
+    print("\nRecorrido completo de cada ruta:")
+    for ruta, fila in por_ruta.sort_values("minutos_extra", ascending=False).iterrows():
+        print(f"  {ruta}: {fila[rapido]:5.1f} min {rapido.lower()} -> "
+              f"{fila[lento]:5.1f} min {lento.lower()} ({fila.minutos_extra:+.1f} min)")
+
+    # =========================================================================
+    # 7. VISUALIZACION DE LOS RESULTADOS
+    # =========================================================================
+    titulo("7. VISUALIZACION DE LOS RESULTADOS")
+    plt.rcParams.update({"font.size": 10, "axes.edgecolor": "#c3c2b7",
+                         "axes.labelcolor": TINTA, "xtick.color": GRIS,
+                         "ytick.color": GRIS, "axes.titlecolor": "#0b0b0b"})
+    fig, ejes = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle("K-Means: Estados de Trafico Descubiertos en el Sistema de Buses",
+                 fontsize=14, fontweight="bold")
+
+    # (a) Metodo del codo
+    ax = ejes[0, 0]
+    ax.plot(list(RANGO_K), inercias, color=AZUL, linewidth=2, marker="o", markersize=7)
+    ax.scatter([k_optimo], [inercias[list(RANGO_K).index(k_optimo)]], s=160,
+               facecolor="none", edgecolor=TINTA, linewidth=2, zorder=3,
+               label=f"k elegido = {k_optimo}")
+    ax.set(title="Metodo del codo", xlabel="Numero de grupos (k)",
+           ylabel="Inercia (menor = grupos mas compactos)", xticks=list(RANGO_K))
+    ax.legend(frameon=False)
+
+    # (b) Coeficiente de silhouette
+    ax = ejes[0, 1]
+    ax.plot(list(RANGO_K), siluetas, color=AZUL, linewidth=2, marker="o", markersize=7)
+    ax.scatter([k_optimo], [max(siluetas)], s=160, facecolor="none",
+               edgecolor=TINTA, linewidth=2, zorder=3, label=f"Maximo en k = {k_optimo}")
+    ax.set(title="Coeficiente de silhouette", xlabel="Numero de grupos (k)",
+           ylabel="Silhouette (mayor = grupos mejor separados)", xticks=list(RANGO_K))
+    ax.legend(frameon=False)
+
+    # (c) Grupos descubiertos y sus centroides
+    ax = ejes[1, 0]
+    for nombre in centroides.sort_values("velocidad_kmh", ascending=False).index:
+        grupo = datos[datos["estado_trafico"] == nombre]
+        ax.scatter(grupo.velocidad_kmh, grupo.ocupacion_pct, s=30, alpha=0.7,
+                   color=COLORES_GRUPO.get(nombre, GRIS), edgecolor="white",
+                   linewidth=0.6, label=f"{nombre} ({len(grupo)} viajes)")
+    ax.scatter(centroides.velocidad_kmh, centroides.ocupacion_pct, marker="X", s=260,
+               color="#0b0b0b", edgecolor="white", linewidth=1.5, label="Centroides")
+    ax.set(title="Viajes agrupados por el modelo", xlabel="Velocidad del bus (km/h)",
+           ylabel="Ocupacion del bus (%)")
+    ax.legend(frameon=False, loc="upper right")
+
+    # (d) Minutos extra por tramo en congestion
+    ax = ejes[1, 1]
+    etiquetas = [f"{tramo} ({ruta[-1]})" for ruta, tramo in por_tramo.index]
+    barras = ax.barh(etiquetas, por_tramo["minutos_extra"], color=NARANJA, height=0.6)
+    for barra, valor in zip(barras, por_tramo["minutos_extra"]):
+        ax.text(valor + 0.08, barra.get_y() + barra.get_height() / 2, f"+{valor:.1f}",
+                va="center", color=TINTA, fontsize=8.5)
+    ax.invert_yaxis()
+    ax.set_xlim(0, por_tramo["minutos_extra"].max() * 1.15)
+    ax.tick_params(axis="y", labelsize=8.5)
+    ax.set(title=f"Minutos extra por tramo cuando el trafico esta {lento.lower()}",
+           xlabel="Minutos adicionales (numero de ruta entre parentesis)")
+
+    for ax in ejes.flat:
+        ax.grid(True, color=REJILLA, linewidth=0.8)
+        ax.set_axisbelow(True)
+        ax.spines[["top", "right"]].set_visible(False)
+    ejes[1, 1].grid(False, axis="y")
+    fig.tight_layout()
+    fig.savefig("resultados_clustering.png", dpi=150)
+    print("Grafica guardada en resultados_clustering.png")
+    plt.show()
+
+
+if __name__ == "__main__":
+    main()
